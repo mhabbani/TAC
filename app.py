@@ -24,9 +24,6 @@ try:
         creds = ServiceAccountCredentials.from_json_keyfile_dict(dict(creds_section), scope)
     else:
         raise KeyError("No Google service account credentials found in st.secrets")
-except Exception:
-    # Fallback for local development: load credentials from a local JSON file.
-    creds = ServiceAccountCredentials.from_json_keyfile_name("credentials.json", scope)
 
 client = gspread.authorize(creds)
 sheet = client.open("TAC-Registeration").sheet1

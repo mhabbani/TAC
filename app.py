@@ -20,8 +20,7 @@ try:
         creds_dict = dict(creds_section)
         if isinstance(creds_dict.get("private_key"), str) and "\\n" in creds_dict["private_key"]:
             creds_dict["private_key"] = creds_dict["private_key"].replace("\\n", "\n").replace("\n", "\n")
-        creds_dict["private_key"] = creds_dict["private_key"].replace("\n", "
-")
+        creds_dict["private_key"] = creds_dict["private_key"].replace("\n", "\n")
         creds = ServiceAccountCredentials.from_json_keyfile_dict(creds_dict, scope)
     else:
         raise KeyError("No Google service account credentials found in st.secrets")

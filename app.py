@@ -5,8 +5,24 @@ import gspread
 from oauth2client.service_account import ServiceAccountCredentials
 
 # إعداد الاتصال بـ Google Sheets
+#
+# In Streamlit Cloud, the Google service account credentials are provided via
+# `st.secrets`. To avoid committing the private key to the repository, the
+# JSON contents of the service account key should be stored under
+# `gcp_service_account` in your app's Secrets (Streamlit → Manage App → Secrets).
+# We then construct the credentials using `from_json_keyfile_dict`.
 scope = ["https://spreadsheets.google.com/feeds", "https://www.googleapis.com/auth/drive"]
-creds = ServiceAccountCredentials.from_json_keyfile_name("credentials.json", scope)
+try:
+    # Load the service account credentials from Streamlit secrets. The
+    # `st.secrets` entry must be a dictionary with the same structure as the
+    # `credentials.json` file. If running locally (e.g., for development),
+    # fallback to reading from a local `credentials.json` file.
+    creds_dict = st.secrets["gcp_service_account"]
+    creds = ServiceAccountCredentials.from_json_keyfile_dict(dict(creds_dict), scope)
+except Exception:
+    # Fallback for local development: load credentials from a local JSON file.
+    creds = ServiceAccountCredentials.from_json_keyfile_name("credentials.json", scope)
+
 client = gspread.authorize(creds)
 sheet = client.open("TAC-Registeration").sheet1
 
@@ -19,6 +35,8 @@ st.markdown("""
         direction: rtl;
         text-align: right;
         font-family: 'Baloo Bhaijaan', sans-serif;
+        /* Apply a light complementary background color that pairs with the TAC logo */
+        background-color: #f0f4ff;
     }
     </style>
 """, unsafe_allow_html=True)

@@ -13,12 +13,17 @@ from oauth2client.service_account import ServiceAccountCredentials
 # We then construct the credentials using `from_json_keyfile_dict`.
 scope = ["https://spreadsheets.google.com/feeds", "https://www.googleapis.com/auth/drive"]
 try:
-    # Load the service account credentials from Streamlit secrets. The
-    # `st.secrets` entry must be a dictionary with the same structure as the
-    # `credentials.json` file. If running locally (e.g., for development),
-    # fallback to reading from a local `credentials.json` file.
-    creds_dict = st.secrets["gcp_service_account"]
-    creds = ServiceAccountCredentials.from_json_keyfile_dict(dict(creds_dict), scope)
+    # Load the service account credentials from Streamlit secrets.
+    # The credentials should be stored under the key "gcp_service_account" in
+    # your Streamlit secrets. However, if the user mistakenly named the key
+    # "google_service_account", we try that as a fallback. When neither key
+    # is present (such as during local development), we'll fall back to reading
+    # from a local `credentials.json` file below.
+    creds_section = st.secrets.get("gcp_service_account") or st.secrets.get("google_service_account")
+    if creds_section:
+        creds = ServiceAccountCredentials.from_json_keyfile_dict(dict(creds_section), scope)
+    else:
+        raise KeyError("No Google service account credentials found in st.secrets")
 except Exception:
     # Fallback for local development: load credentials from a local JSON file.
     creds = ServiceAccountCredentials.from_json_keyfile_name("credentials.json", scope)

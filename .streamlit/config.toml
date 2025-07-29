@@ -1,0 +1,6 @@
+    [client]
+    toolbarMode = "minimal" # Hides the toolbar, leaving only the hamburger menu
+    showSidebarNavigation = false # Hides sidebar navigation in multi-page apps
+
+    [ui]
+    hideTopBar = true # Hides the loading icon and Stop button

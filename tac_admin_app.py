@@ -2,9 +2,10 @@
 import streamlit as st
 import gspread
 import pandas as pd
+import plotly.express as px
 from oauth2client.service_account import ServiceAccountCredentials
 
-# إعداد الاتصال بـ Google Sheets
+# Google Sheets setup
 scope = ["https://spreadsheets.google.com/feeds", "https://www.googleapis.com/auth/drive"]
 try:
     creds_section = st.secrets.get("gcp_service_account") or st.secrets.get("google_service_account")
@@ -21,7 +22,7 @@ except Exception:
 client = gspread.authorize(creds)
 sheet = client.open("TAC-Registeration").sheet1
 
-# المستخدمون الثابتون
+# Static users
 USERS = {
     "admin": {"role": "admin", "password": "adminpass"},
     "osama": {"role": "power", "password": "osama123"},
@@ -29,7 +30,7 @@ USERS = {
     "reem": {"role": "power", "password": "reem123"}
 }
 
-st.set_page_config(page_title="لوحة تحكم الإدارة - TAC Admin", layout="centered")
+st.set_page_config(page_title="TAC Admin Panel", layout="wide")
 
 st.markdown("""
     <style>
@@ -41,7 +42,7 @@ st.markdown("""
     </style>
 """, unsafe_allow_html=True)
 
-st.title("🛡️ TAC Admin Panel")
+st.title("🛡️ لوحة التحكم الإدارية - TAC Admin")
 
 username = st.text_input("اسم المستخدم")
 password = st.text_input("كلمة المرور", type="password")
@@ -54,13 +55,64 @@ if st.button("تسجيل الدخول"):
 
         if role == "admin":
             st.subheader("👤 لوحة المشرف")
-            st.markdown("- ✅ إدارة المستخدمين (قريبًا)")
-            st.markdown("- 🗂️ تعديل مشاركة Google Sheet")
-            st.markdown("- ⚙️ إضافة/إزالة صلاحيات")
+
+            # عرض المشاركة الحالية للشيت
+            st.markdown("### 🔗 حالة المشاركة في Google Sheet")
+            try:
+                perms = sheet.spreadsheet.list_permissions()
+                for p in perms:
+                    email = p.get("emailAddress", "—")
+                    role = p.get("role", "—")
+                    st.write(f"📧 {email} — 🛡️ {role}")
+            except Exception as e:
+                st.error("لم يتم الحصول على بيانات المشاركة")
+
+            # التحليلات والرسوم البيانية
+            st.subheader("📊 تحليلات التسجيل")
+            try:
+                data = sheet.get_all_records()
+                df = pd.DataFrame(data)
+
+                chart_type = st.selectbox("اختر نوع المخطط", ["عدد المسجلين لكل كورس", "عدد حسب صلة القرابة", "تحليل الأعمار", "تكرار رقم ولي الأمر", "الطلاب المسجلون بأكثر من دورة"])
+
+                if chart_type == "عدد المسجلين لكل كورس":
+                    fig = px.bar(df["الكورس"].value_counts().reset_index(), x="index", y="الكورس", labels={"index": "اسم الكورس", "الكورس": "عدد المسجلين"})
+                    st.plotly_chart(fig)
+
+                elif chart_type == "عدد حسب صلة القرابة":
+                    fig = px.pie(df, names="صلة القرابة", title="نسب الأقارب المسجلين")
+                    st.plotly_chart(fig)
+
+                elif chart_type == "تحليل الأعمار":
+                    fig = px.histogram(df, x="العمر", nbins=10)
+                    st.plotly_chart(fig)
+
+                elif chart_type == "تكرار رقم ولي الأمر":
+                    siblings = df.groupby("رقم اتصال ولي الأمر").filter(lambda x: len(x) > 1)
+                    st.write("👨‍👩‍👧‍👦 المسجلين بنفس رقم ولي الأمر (إخوة):", siblings[["الاسم", "رقم اتصال ولي الأمر"]])
+                    st.write(f"🔢 عدد الأسر التي سجلت أكثر من طفل: {siblings['رقم اتصال ولي الأمر'].nunique()}")
+
+                elif chart_type == "الطلاب المسجلون بأكثر من دورة":
+                    duplicates = df.groupby("الاسم").filter(lambda x: len(x) > 1)
+                    st.write("👥 الطلاب المسجلون في أكثر من دورة:", duplicates[["الاسم", "الكورس"]])
+                    st.write(f"🔁 عددهم: {duplicates['الاسم'].nunique()}")
+
+                # تحليل ميول التسجيل العائلي
+                st.markdown("### 💡 تحليل الشرائح المهتمة بتسجيل الأقارب")
+                relation_counts = df["صلة القرابة"].value_counts()
+                st.write("النسب الأكثر تسجيلًا لأقارب:", relation_counts)
+
+            except Exception as e:
+                st.error("حدث خطأ في التحليلات")
+
+            # رابط صفحة جديدة (Placeholder)
+            st.markdown("---")
+            st.markdown("### 💰 الانتقال إلى صفحة مراقبة الحسابات والمدفوعات")
+            if st.button("🔗 الانتقال إلى صفحة الدفع"):
+                st.success("🔜 سيتم التوجيه إلى صفحة جديدة (سيتم تطويرها لاحقًا)")
+
         elif role == "power":
             st.subheader("📊 لوحة المستخدم المتقدم")
-            st.markdown("يمكنك عرض بيانات التسجيل أدناه 👇")
-
             try:
                 data = sheet.get_all_records()
                 df = pd.DataFrame(data)

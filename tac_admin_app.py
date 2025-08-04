@@ -1,20 +1,23 @@
 
+# Fixes:
+# 1. Persist login using st.session_state
+# 2. Display chart only after login
+# 3. Avoid re-triggering login form on dropdown interaction
+
 import streamlit as st
 import gspread
 import pandas as pd
 import plotly.express as px
 from oauth2client.service_account import ServiceAccountCredentials
 
-# Google Sheets setup
 # إعداد الاتصال بـ Google Sheets
 scope = ["https://spreadsheets.google.com/feeds", "https://www.googleapis.com/auth/drive"]
-
 try:
     creds_section = st.secrets.get("gcp_service_account") or st.secrets.get("google_service_account")
     if creds_section:
         creds_dict = dict(creds_section)
         if isinstance(creds_dict.get("private_key"), str):
-            creds_dict["private_key"] = creds_dict["private_key"].replace("\\n", "\n")        
+            creds_dict["private_key"] = creds_dict["private_key"].replace("\\n", "\n")
         creds = ServiceAccountCredentials.from_json_keyfile_dict(creds_dict, scope)
     else:
         raise KeyError("No credentials found in secrets")
@@ -24,15 +27,11 @@ except Exception:
 client = gspread.authorize(creds)
 sheet = client.open("TAC-Registeration").sheet1
 
-
-
-
-# Static users
 USERS = {
-    "admin": {"role": "admin", "password": "adminpass"},
-    "osama": {"role": "power", "password": "osama123"},
-    "nour": {"role": "power", "password": "nour123"},
-    "reem": {"role": "power", "password": "reem123"}
+    "admin": {"role": "admin", "password": "Asnf_129"},
+    "Salma": {"role": "power", "password": "Salma1234"},
+    "Sara": {"role": "power", "password": "Sara1234"},
+    "Amal": {"role": "power", "password": "Amal1234"}
 }
 
 st.set_page_config(page_title="TAC Admin Panel", layout="wide")
@@ -49,81 +48,86 @@ st.markdown("""
 
 st.title("🛡️ لوحة التحكم الإدارية - TAC Admin")
 
-username = st.text_input("اسم المستخدم")
-password = st.text_input("كلمة المرور", type="password")
+# Initialize session
+if "logged_in" not in st.session_state:
+    st.session_state.logged_in = False
+    st.session_state.username = ""
 
-if st.button("تسجيل الدخول"):
-    if username in USERS and USERS[username]["password"] == password:
-        st.success(f"مرحبًا {username} 👋")
+# Login form
+if not st.session_state.logged_in:
+    username = st.text_input("اسم المستخدم")
+    password = st.text_input("كلمة المرور", type="password")
+    if st.button("تسجيل الدخول"):
+        if username in USERS and USERS[username]["password"] == password:
+            st.session_state.logged_in = True
+            st.session_state.username = username
+            st.success(f"مرحبًا {username} 👋")
+        else:
+            st.error("❌ اسم المستخدم أو كلمة المرور غير صحيحة")
+    st.stop()
 
-        role = USERS[username]["role"]
+# After login
+role = USERS[st.session_state.username]["role"]
+st.success(f"مرحبًا {st.session_state.username} 👋 - الصلاحية: {role}")
 
-        if role == "admin":
-            st.subheader("👤 لوحة المشرف")
+# Fetch data
+try:
+    df = pd.DataFrame(sheet.get_all_records())
+except Exception as e:
+    st.error(f"❌ فشل في تحميل البيانات: {e}")
+    st.stop()
 
-            # عرض المشاركة الحالية للشيت
-            st.markdown("### 🔗 حالة المشاركة في Google Sheet")
-            try:
-                perms = sheet.spreadsheet.list_permissions()
-                for p in perms:
-                    email = p.get("emailAddress", "—")
-                    role = p.get("role", "—")
-                    st.write(f"📧 {email} — 🛡️ {role}")
-            except Exception as e:
-                st.error("لم يتم الحصول على بيانات المشاركة")
+if role == "admin":
+    st.subheader("👤 لوحة المشرف")
 
-            # التحليلات والرسوم البيانية
-            st.subheader("📊 تحليلات التسجيل")
-            try:
-                data = sheet.get_all_records()
-                df = pd.DataFrame(data)
+    # Google Sheet sharing info
+    with st.expander("🔗 مشاركة Google Sheet"):
+        try:
+            perms = sheet.spreadsheet.list_permissions()
+            for p in perms:
+                email = p.get("emailAddress", "—")
+                role_perm = p.get("role", "—")
+                st.write(f"📧 {email} — 🛡️ {role_perm}")
+        except Exception as e:
+            st.error("لم يتم الحصول على بيانات المشاركة")
 
-                chart_type = st.selectbox("اختر نوع المخطط", ["عدد المسجلين لكل كورس", "عدد حسب صلة القرابة", "تحليل الأعمار", "تكرار رقم ولي الأمر", "الطلاب المسجلون بأكثر من دورة"])
+    # Analytics section
+    st.subheader("📊 تحليلات التسجيل")
+    chart_type = st.selectbox("اختر نوع التحليل", [
+        "عدد المسجلين لكل كورس",
+        "نسبة صلة القرابة",
+        "تحليل الأعمار",
+        "الإخوة (نفس رقم ولي الأمر)",
+        "المسجلين في أكثر من دورة"
+    ])
 
-                if chart_type == "عدد المسجلين لكل كورس":
-                    fig = px.bar(df["الكورس"].value_counts().reset_index(), x="index", y="الكورس", labels={"index": "اسم الكورس", "الكورس": "عدد المسجلين"})
-                    st.plotly_chart(fig)
+    if chart_type == "عدد المسجلين لكل كورس":
+        fig = px.bar(df["الكورس"].value_counts().reset_index(), x="index", y="الكورس", labels={"index": "اسم الكورس", "الكورس": "عدد"})
+        st.plotly_chart(fig)
 
-                elif chart_type == "عدد حسب صلة القرابة":
-                    fig = px.pie(df, names="صلة القرابة", title="نسب الأقارب المسجلين")
-                    st.plotly_chart(fig)
+    elif chart_type == "نسبة صلة القرابة":
+        fig = px.pie(df, names="صلة القرابة")
+        st.plotly_chart(fig)
 
-                elif chart_type == "تحليل الأعمار":
-                    fig = px.histogram(df, x="العمر", nbins=10)
-                    st.plotly_chart(fig)
+    elif chart_type == "تحليل الأعمار":
+        fig = px.histogram(df, x="العمر", nbins=10)
+        st.plotly_chart(fig)
 
-                elif chart_type == "تكرار رقم ولي الأمر":
-                    siblings = df.groupby("رقم اتصال ولي الأمر").filter(lambda x: len(x) > 1)
-                    st.write("👨‍👩‍👧‍👦 المسجلين بنفس رقم ولي الأمر (إخوة):", siblings[["الاسم", "رقم اتصال ولي الأمر"]])
-                    st.write(f"🔢 عدد الأسر التي سجلت أكثر من طفل: {siblings['رقم اتصال ولي الأمر'].nunique()}")
+    elif chart_type == "الإخوة (نفس رقم ولي الأمر)":
+        siblings = df.groupby("رقم اتصال ولي الأمر").filter(lambda x: len(x) > 1)
+        st.dataframe(siblings[["الاسم", "رقم اتصال ولي الأمر"]])
+        st.info(f"👨‍👩‍👧‍👦 الأسر التي سجلت أكثر من طفل: {siblings['رقم اتصال ولي الأمر'].nunique()}")
 
-                elif chart_type == "الطلاب المسجلون بأكثر من دورة":
-                    duplicates = df.groupby("الاسم").filter(lambda x: len(x) > 1)
-                    st.write("👥 الطلاب المسجلون في أكثر من دورة:", duplicates[["الاسم", "الكورس"]])
-                    st.write(f"🔁 عددهم: {duplicates['الاسم'].nunique()}")
+    elif chart_type == "المسجلين في أكثر من دورة":
+        multi = df.groupby("الاسم").filter(lambda x: len(x) > 1)
+        st.dataframe(multi[["الاسم", "الكورس"]])
+        st.info(f"🔁 عدد الطلاب المسجلين في أكثر من دورة: {multi['الاسم'].nunique()}")
 
-                # تحليل ميول التسجيل العائلي
-                st.markdown("### 💡 تحليل الشرائح المهتمة بتسجيل الأقارب")
-                relation_counts = df["صلة القرابة"].value_counts()
-                st.write("النسب الأكثر تسجيلًا لأقارب:", relation_counts)
+    st.markdown("### 💰 الانتقال إلى صفحة مراقبة الحسابات والمدفوعات")
+    if st.button("🔗 المتابعة إلى صفحة الدفع"):
+        st.warning("🚧 هذه الصفحة تحت التطوير")
 
-            except Exception as e:
-                st.error("حدث خطأ في التحليلات")
-
-            # رابط صفحة جديدة (Placeholder)
-            st.markdown("---")
-            st.markdown("### 💰 الانتقال إلى صفحة مراقبة الحسابات والمدفوعات")
-            if st.button("🔗 الانتقال إلى صفحة الدفع"):
-                st.success("🔜 سيتم التوجيه إلى صفحة جديدة (سيتم تطويرها لاحقًا)")
-
-        elif role == "power":
-            st.subheader("📊 لوحة المستخدم المتقدم")
-            try:
-                data = sheet.get_all_records()
-                df = pd.DataFrame(data)
-                st.dataframe(df)
-                st.download_button("📥 تحميل البيانات", data=df.to_csv(index=False), file_name="TAC_Registrations.csv")
-            except Exception as e:
-                st.error(f"حدث خطأ أثناء تحميل البيانات: {e}")
-    else:
-        st.error("❌ اسم المستخدم أو كلمة المرور غير صحيحة")
+elif role == "power":
+    st.subheader("📊 بيانات التسجيل")
+    st.dataframe(df)
+    st.download_button("📥 تحميل البيانات", data=df.to_csv(index=False), file_name="TAC_Registrations.csv")

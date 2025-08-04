@@ -6,13 +6,15 @@ import plotly.express as px
 from oauth2client.service_account import ServiceAccountCredentials
 
 # Google Sheets setup
+# إعداد الاتصال بـ Google Sheets
 scope = ["https://spreadsheets.google.com/feeds", "https://www.googleapis.com/auth/drive"]
+
 try:
     creds_section = st.secrets.get("gcp_service_account") or st.secrets.get("google_service_account")
     if creds_section:
         creds_dict = dict(creds_section)
         if isinstance(creds_dict.get("private_key"), str):
-            creds_dict["private_key"] = creds_dict["private_key"].replace("\\n", "\n").replace("\n", "\n")
+            creds_dict["private_key"] = creds_dict["private_key"].replace("\\n", "\n")        
         creds = ServiceAccountCredentials.from_json_keyfile_dict(creds_dict, scope)
     else:
         raise KeyError("No credentials found in secrets")
@@ -21,6 +23,9 @@ except Exception:
 
 client = gspread.authorize(creds)
 sheet = client.open("TAC-Registeration").sheet1
+
+
+
 
 # Static users
 USERS = {

@@ -28,10 +28,10 @@ client = gspread.authorize(creds)
 sheet = client.open("TAC-Registeration").sheet1
 
 USERS = {
-    "admin": {"role": "admin", "password": "Asnf_129"},
-    "Salma": {"role": "power", "password": "Salma1234"},
-    "Sara": {"role": "power", "password": "Sara1234"},
-    "Amal": {"role": "power", "password": "Amal1234"}
+    "admin": {"role": "admin", "password": "adminpass"},
+    "salma": {"role": "power", "password": "salma123"},
+    "sara": {"role": "power", "password": "sara123"},
+    "amal": {"role": "power", "password": "amal123"}
 }
 
 st.set_page_config(page_title="TAC Admin Panel", layout="wide")
@@ -92,7 +92,32 @@ if role == "admin":
             st.error("لم يتم الحصول على بيانات المشاركة")
 
     # Analytics section
-    st.subheader("📊 تحليلات التسجيل")
+    
+    st.subheader("📋 معاينة نموذج التسجيل")
+
+    col1, col2, col3 = st.columns(3)
+    row_limit = col1.selectbox("عدد السجلات المعروضة", ["الكل", 5, 10, 20, 50])
+    search_name = col2.text_input("🔍 البحث بالاسم أو الكورس")
+    age_filter = col3.selectbox("📊 تصفية حسب العمر", ["الكل"] + sorted(df["العمر"].dropna().unique().astype(str).tolist()))
+
+    country_filter = st.selectbox("🌍 تصفية حسب الدولة", ["الكل"] + sorted(df["العنوان"].dropna().apply(lambda x: x.split("-")[0].strip()).unique().tolist()))
+
+    filtered_df = df.copy()
+    if search_name:
+        filtered_df = filtered_df[
+            filtered_df["الاسم"].str.contains(search_name, case=False, na=False) |
+            filtered_df["الكورس"].str.contains(search_name, case=False, na=False)
+        ]
+    if age_filter != "الكل":
+        filtered_df = filtered_df[filtered_df["العمر"] == int(age_filter)]
+    if country_filter != "الكل":
+        filtered_df = filtered_df[filtered_df["العنوان"].str.startswith(country_filter)]
+
+    if row_limit == "الكل":
+        st.dataframe(filtered_df)
+    else:
+        st.dataframe(filtered_df.tail(int(row_limit)))
+\n    st.subheader("📊 تحليلات التسجيل")
     chart_type = st.selectbox("اختر نوع التحليل", [
         "عدد المسجلين لكل كورس",
         "نسبة صلة القرابة",
@@ -101,7 +126,37 @@ if role == "admin":
         "المسجلين في أكثر من دورة"
     ])
 
+    st.subheader("📊 تحليلات نصية للتسجيل")
+
+    total = len(df)
+
     if chart_type == "عدد المسجلين لكل كورس":
+        st.markdown("### 📘 توزيع الكورسات:")
+        for course, count in df["الكورس"].value_counts().items():
+            percent = round((count / total) * 100, 2)
+            st.markdown(f"- **{course}**: {count} طالب ({percent}%)")
+
+    elif chart_type == "نسبة صلة القرابة":
+        st.markdown("### 🧑‍🤝‍🧑 صلات القرابة:")
+        for rel, count in df["صلة القرابة"].value_counts().items():
+            percent = round((count / total) * 100, 2)
+            st.markdown(f"- **{rel}**: {count} ({percent}%)")
+
+    elif chart_type == "تحليل الأعمار":
+        st.markdown("### 🎂 توزيع الأعمار:")
+        for age, count in df["العمر"].value_counts().sort_index().items():
+            percent = round((count / total) * 100, 2)
+            st.markdown(f"- **{age} سنة**: {count} ({percent}%)")
+
+    elif chart_type == "الإخوة (نفس رقم ولي الأمر)":
+        siblings = df.groupby("رقم اتصال ولي الأمر").filter(lambda x: len(x) > 1)
+        st.dataframe(siblings[["الاسم", "رقم اتصال ولي الأمر"]])
+        st.info(f"👨‍👩‍👧‍👦 عدد الأسر التي سجلت أكثر من طفل: {siblings['رقم اتصال ولي الأمر'].nunique()}")
+
+    elif chart_type == "المسجلين في أكثر من دورة":
+        multi = df.groupby("الاسم").filter(lambda x: len(x) > 1)
+        st.dataframe(multi[["الاسم", "الكورس"]])
+        st.info(f"🔁 عدد الطلاب المسجلين في أكثر من دورة: {multi['الاسم'].nunique()}")
         fig = px.bar(df["الكورس"].value_counts().reset_index(), x="index", y="الكورس", labels={"index": "اسم الكورس", "الكورس": "عدد"})
         st.plotly_chart(fig)
 
@@ -130,4 +185,29 @@ if role == "admin":
 elif role == "power":
     st.subheader("📊 بيانات التسجيل")
     st.dataframe(df)
-    st.download_button("📥 تحميل البيانات", data=df.to_csv(index=False), file_name="TAC_Registrations.csv")
+    
+    st.subheader("📋 معاينة نموذج التسجيل")
+
+    col1, col2, col3 = st.columns(3)
+    row_limit = col1.selectbox("عدد السجلات المعروضة", ["الكل", 5, 10, 20, 50])
+    search_name = col2.text_input("🔍 البحث بالاسم أو الكورس")
+    age_filter = col3.selectbox("📊 تصفية حسب العمر", ["الكل"] + sorted(df["العمر"].dropna().unique().astype(str).tolist()))
+
+    country_filter = st.selectbox("🌍 تصفية حسب الدولة", ["الكل"] + sorted(df["العنوان"].dropna().apply(lambda x: x.split("-")[0].strip()).unique().tolist()))
+
+    filtered_df = df.copy()
+    if search_name:
+        filtered_df = filtered_df[
+            filtered_df["الاسم"].str.contains(search_name, case=False, na=False) |
+            filtered_df["الكورس"].str.contains(search_name, case=False, na=False)
+        ]
+    if age_filter != "الكل":
+        filtered_df = filtered_df[filtered_df["العمر"] == int(age_filter)]
+    if country_filter != "الكل":
+        filtered_df = filtered_df[filtered_df["العنوان"].str.startswith(country_filter)]
+
+    if row_limit == "الكل":
+        st.dataframe(filtered_df)
+    else:
+        st.dataframe(filtered_df.tail(int(row_limit)))
+\n    st.download_button("📥 تحميل البيانات", data=df.to_csv(index=False), file_name="TAC_Registrations.csv")

@@ -1,24 +1,17 @@
 
-# Fixes:
-# 1. Persist login using st.session_state
-# 2. Display chart only after login
-# 3. Avoid re-triggering login form on dropdown interaction
-
 import streamlit as st
 import gspread
 import pandas as pd
-import plotly.express as px
 from oauth2client.service_account import ServiceAccountCredentials
 
-# إعداد الاتصال بـ Google Sheets
+# Google Sheets setup
 scope = ["https://spreadsheets.google.com/feeds", "https://www.googleapis.com/auth/drive"]
-
 try:
     creds_section = st.secrets.get("gcp_service_account") or st.secrets.get("google_service_account")
     if creds_section:
         creds_dict = dict(creds_section)
         if isinstance(creds_dict.get("private_key"), str):
-            creds_dict["private_key"] = creds_dict["private_key"].replace("\\n", "\n")        
+            creds_dict["private_key"] = creds_dict["private_key"].replace("\\n", "\n")
         creds = ServiceAccountCredentials.from_json_keyfile_dict(creds_dict, scope)
     else:
         raise KeyError("No credentials found in secrets")
@@ -49,12 +42,11 @@ st.markdown("""
 
 st.title("🛡️ لوحة التحكم الإدارية - TAC Admin")
 
-# Initialize session
+# Session state for login
 if "logged_in" not in st.session_state:
     st.session_state.logged_in = False
     st.session_state.username = ""
 
-# Login form
 if not st.session_state.logged_in:
     username = st.text_input("اسم المستخدم")
     password = st.text_input("كلمة المرور", type="password")
@@ -67,11 +59,9 @@ if not st.session_state.logged_in:
             st.error("❌ اسم المستخدم أو كلمة المرور غير صحيحة")
     st.stop()
 
-# After login
 role = USERS[st.session_state.username]["role"]
 st.success(f"مرحبًا {st.session_state.username} 👋 - الصلاحية: {role}")
 
-# Fetch data
 try:
     df = pd.DataFrame(sheet.get_all_records())
 except Exception as e:
@@ -81,7 +71,6 @@ except Exception as e:
 if role == "admin":
     st.subheader("👤 لوحة المشرف")
 
-    # Google Sheet sharing info
     with st.expander("🔗 مشاركة Google Sheet"):
         try:
             perms = sheet.spreadsheet.list_permissions()
@@ -92,15 +81,11 @@ if role == "admin":
         except Exception as e:
             st.error("لم يتم الحصول على بيانات المشاركة")
 
-    # Analytics section
-    
     st.subheader("📋 معاينة نموذج التسجيل")
-
     col1, col2, col3 = st.columns(3)
     row_limit = col1.selectbox("عدد السجلات المعروضة", ["الكل", 5, 10, 20, 50])
     search_name = col2.text_input("🔍 البحث بالاسم أو الكورس")
     age_filter = col3.selectbox("📊 تصفية حسب العمر", ["الكل"] + sorted(df["العمر"].dropna().unique().astype(str).tolist()))
-
     country_filter = st.selectbox("🌍 تصفية حسب الدولة", ["الكل"] + sorted(df["العنوان"].dropna().apply(lambda x: x.split("-")[0].strip()).unique().tolist()))
 
     filtered_df = df.copy()
@@ -118,7 +103,9 @@ if role == "admin":
         st.dataframe(filtered_df)
     else:
         st.dataframe(filtered_df.tail(int(row_limit)))
-     st.subheader("📊 تحليلات التسجيل")
+
+    # TEXTUAL ANALYTICS
+    st.subheader("📊 تحليلات نصية للتسجيل")
     chart_type = st.selectbox("اختر نوع التحليل", [
         "عدد المسجلين لكل كورس",
         "نسبة صلة القرابة",
@@ -126,8 +113,6 @@ if role == "admin":
         "الإخوة (نفس رقم ولي الأمر)",
         "المسجلين في أكثر من دورة"
     ])
-
-    st.subheader("📊 تحليلات نصية للتسجيل")
 
     total = len(df)
 
@@ -158,26 +143,6 @@ if role == "admin":
         multi = df.groupby("الاسم").filter(lambda x: len(x) > 1)
         st.dataframe(multi[["الاسم", "الكورس"]])
         st.info(f"🔁 عدد الطلاب المسجلين في أكثر من دورة: {multi['الاسم'].nunique()}")
-        fig = px.bar(df["الكورس"].value_counts().reset_index(), x="index", y="الكورس", labels={"index": "اسم الكورس", "الكورس": "عدد"})
-        st.plotly_chart(fig)
-
-    elif chart_type == "نسبة صلة القرابة":
-        fig = px.pie(df, names="صلة القرابة")
-        st.plotly_chart(fig)
-
-    elif chart_type == "تحليل الأعمار":
-        fig = px.histogram(df, x="العمر", nbins=10)
-        st.plotly_chart(fig)
-
-    elif chart_type == "الإخوة (نفس رقم ولي الأمر)":
-        siblings = df.groupby("رقم اتصال ولي الأمر").filter(lambda x: len(x) > 1)
-        st.dataframe(siblings[["الاسم", "رقم اتصال ولي الأمر"]])
-        st.info(f"👨‍👩‍👧‍👦 الأسر التي سجلت أكثر من طفل: {siblings['رقم اتصال ولي الأمر'].nunique()}")
-
-    elif chart_type == "المسجلين في أكثر من دورة":
-        multi = df.groupby("الاسم").filter(lambda x: len(x) > 1)
-        st.dataframe(multi[["الاسم", "الكورس"]])
-        st.info(f"🔁 عدد الطلاب المسجلين في أكثر من دورة: {multi['الاسم'].nunique()}")
 
     st.markdown("### 💰 الانتقال إلى صفحة مراقبة الحسابات والمدفوعات")
     if st.button("🔗 المتابعة إلى صفحة الدفع"):
@@ -186,29 +151,4 @@ if role == "admin":
 elif role == "power":
     st.subheader("📊 بيانات التسجيل")
     st.dataframe(df)
-    
-    st.subheader("📋 معاينة نموذج التسجيل")
-
-    col1, col2, col3 = st.columns(3)
-    row_limit = col1.selectbox("عدد السجلات المعروضة", ["الكل", 5, 10, 20, 50])
-    search_name = col2.text_input("🔍 البحث بالاسم أو الكورس")
-    age_filter = col3.selectbox("📊 تصفية حسب العمر", ["الكل"] + sorted(df["العمر"].dropna().unique().astype(str).tolist()))
-
-    country_filter = st.selectbox("🌍 تصفية حسب الدولة", ["الكل"] + sorted(df["العنوان"].dropna().apply(lambda x: x.split("-")[0].strip()).unique().tolist()))
-
-    filtered_df = df.copy()
-    if search_name:
-        filtered_df = filtered_df[
-            filtered_df["الاسم"].str.contains(search_name, case=False, na=False) |
-            filtered_df["الكورس"].str.contains(search_name, case=False, na=False)
-        ]
-    if age_filter != "الكل":
-        filtered_df = filtered_df[filtered_df["العمر"] == int(age_filter)]
-    if country_filter != "الكل":
-        filtered_df = filtered_df[filtered_df["العنوان"].str.startswith(country_filter)]
-
-    if row_limit == "الكل":
-        st.dataframe(filtered_df)
-    else:
-        st.dataframe(filtered_df.tail(int(row_limit)))
-\n    st.download_button("📥 تحميل البيانات", data=df.to_csv(index=False), file_name="TAC_Registrations.csv")
+    st.download_button("📥 تحميل البيانات", data=df.to_csv(index=False), file_name="TAC_Registrations.csv")

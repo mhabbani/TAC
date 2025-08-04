@@ -118,7 +118,7 @@ if role == "admin":
         st.dataframe(filtered_df)
     else:
         st.dataframe(filtered_df.tail(int(row_limit)))
-\n    st.subheader("📊 تحليلات التسجيل")
+     st.subheader("📊 تحليلات التسجيل")
     chart_type = st.selectbox("اختر نوع التحليل", [
         "عدد المسجلين لكل كورس",
         "نسبة صلة القرابة",

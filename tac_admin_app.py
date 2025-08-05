@@ -23,8 +23,8 @@ sheet = client.open("TAC-Registeration").sheet1
 
 USERS = {
     "admin": {"role": "admin", "password": "adminpass"},
-    "salma": {"role": "power", "password": "salma123"},
-    "sara": {"role": "power", "password": "sara123"},
+    "salma": {"role": "power", "password": "stac@2025"},
+    "sara": {"role": "power", "password": "stac@2025"},
     "amal": {"role": "power", "password": "amal123"}
 }
 

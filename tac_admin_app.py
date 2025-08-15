@@ -1,14 +1,20 @@
-# tac_admin.py
+# ------------------------------------------------------------------------------
+# author : Mohamed Habbani
+# version : v1.0.0
+# date : 2025-08-15 16:00 EDT
+#
+# File: tac_admin.py
 # TAC Admin Panel (Arabic RTL) + Accounting & Receipts inside the same spreadsheet
 # ------------------------------------------------------------------------------
 # - Preserves old admin features (login, RTL UI, filters, analytics, sharing view)
 # - Uses your original Google auth pattern (secrets -> fallback to credentials.json)
 # - Reads registrations from existing spreadsheet WITHOUT modifying it
-# - Adds two worksheets INSIDE the same spreadsheet (created if missing):
+# - Adds two worksheets INSIDE the same registration spreadsheet (created if missing):
 #     * "Accounting"       -> one row per Registration_ID (master)
 #     * "Payments_Ledger"  -> one row per payment/receipt
 # - Supports Completed or Installments (1–6), prevents overpayment
 # - Generates PDF receipts for each payment (download)
+# - Robust worksheet selection (secrets → common names → first sheet) + sidebar override
 # ------------------------------------------------------------------------------
 
 import streamlit as st
@@ -56,6 +62,7 @@ REG_SPREADSHEET_NAME = (
     or "TAC-Registeration"
 )
 REG_WORKSHEET_NAME = st.secrets.get("tac", {}).get("registration_worksheet_name")  # optional; old code used .sheet1
+
 ACCOUNTING_MASTER_WS = "Accounting"
 PAYMENTS_LEDGER_WS   = "Payments_Ledger"
 
@@ -135,11 +142,37 @@ def open_reg_spreadsheet():
     """Open the registration spreadsheet by name."""
     return client.open(REG_SPREADSHEET_NAME)
 
-def get_registration_worksheet(sh):
-    """Return the registration worksheet: by name if provided, else the first sheet (.sheet1)."""
-    if REG_WORKSHEET_NAME:
-        return sh.worksheet(REG_WORKSHEET_NAME)
-    return sh.sheet1
+def pick_registration_worksheet(sh):
+    """Pick the correct registration worksheet robustly + allow override from sidebar."""
+    try:
+        titles = [ws.title for ws in sh.worksheets()]
+    except Exception as e:
+        st.error(f"تعذر قراءة أوراق العمل: {e}")
+        st.stop()
+
+    # preferred from secrets (if provided)
+    desired = REG_WORKSHEET_NAME
+
+    # common candidates (en/ar)
+    candidates = [desired, "Form Responses 1", "Sheet1", "الردود على النموذج 1"]
+    chosen = None
+    for name in candidates:
+        if name and name in titles:
+            chosen = name
+            break
+
+    if not chosen:
+        if not titles:
+            st.error("لا توجد أي أوراق عمل داخل الملف.")
+            st.stop()
+        chosen = titles[0]  # fallback to first sheet
+
+    # allow override via sidebar
+    idx = titles.index(chosen) if chosen in titles else 0
+    chosen = st.sidebar.selectbox("اختر ورقة التسجيل", titles, index=idx, key="reg_ws_choice")
+
+    st.caption(f"📄 تم استخدام ورقة: **{chosen}**")
+    return sh.worksheet(chosen)
 
 def ensure_worksheet(sh, title: str, cols: list):
     """Ensure worksheet exists with the expected header (creates if missing)."""
@@ -238,11 +271,11 @@ def generate_receipt_pdf(receipt_id: str, reg_row: dict, pay_amount: str,
     return buf
 
 # =========================
-# LOAD REGISTRATIONS (as old)
+# LOAD REGISTRATIONS (robust)
 # =========================
 try:
     reg_sh = open_reg_spreadsheet()
-    reg_ws = get_registration_worksheet(reg_sh)
+    reg_ws = pick_registration_worksheet(reg_sh)
     df = pd.DataFrame(reg_ws.get_all_records())
 except Exception as e:
     st.error(f"❌ فشل في تحميل البيانات: {e}")
@@ -390,7 +423,8 @@ if role == "admin" and page == "المحاسبة والمدفوعات":
     ws_master = ensure_worksheet(reg_sh, ACCOUNTING_MASTER_WS, ACC_MASTER_COLS)
     ws_ledger = ensure_worksheet(reg_sh, PAYMENTS_LEDGER_WS, ACC_LEDGER_COLS)
 
-    # Reload registrations fresh for accounting page
+    # Reload registrations fresh for accounting page (respect the same chosen worksheet)
+    reg_ws = pick_registration_worksheet(reg_sh)
     reg_df = pd.DataFrame(reg_ws.get_all_records())
     if reg_df.empty:
         st.warning("لا توجد تسجيلات حالياً.")

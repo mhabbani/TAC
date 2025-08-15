@@ -17,7 +17,7 @@ from reportlab.lib.units import mm
 # ---------------------------
 st.set_page_config(page_title="TAC – Accounting & Receipts", layout="wide")
 
-REG_SHEET_NAME = st.secrets["tac"]["registration_spreadsheet_name"]          # e.g., "TAC-Registeration"
+REG_SHEET_NAME = st.secrets["tac"]["TAC-Registeration"]          # e.g., "TAC-Registeration"
 REG_WORKSHEET  = st.secrets["tac"]["registration_worksheet_name"]           # e.g., "Form Responses 1" or "Sheet1"
 ACC_SPREADSHEET = st.secrets["tac"]["accounting_spreadsheet_name"]          # e.g., "TAC-Accounting"
 

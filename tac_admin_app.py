@@ -1,7 +1,7 @@
 # ------------------------------------------------------------------------------
 # author : Mohamed Habbani
-# version : v1.0.3
-# date : 2025-08-15 16:20 EDT
+# version : v1.0.4
+# date : 2025-08-15 16:45 EDT
 #
 # File: tac_admin_app.py
 # TAC Admin Panel (Arabic RTL) + Accounting & Receipts inside the same spreadsheet
@@ -12,13 +12,11 @@
 # - Adds two worksheets INSIDE the same registration spreadsheet (created if missing):
 #     * "Accounting"       -> one row per Registration_ID (master)
 #     * "Payments_Ledger"  -> one row per payment/receipt
-# - NEW RULES:
-#     * Full payment = 90
-#     * Installment = 15 (you can check multiple installments; amount = 15 × count)
-#     * Already-paid installments are locked (checked & disabled)
-# - Prevents overpayment and generates PDF receipts
-# - Robust worksheet selection (secrets → common names → first sheet) via ONE sidebar selectbox
-#   stored in session_state to avoid duplicate widget keys
+# - Business rules:
+#     * Full payment = 90 (if some amount already paid, we charge only the remaining up to 90)
+#     * Installment = 15 each (can select multiple at once; locked if already paid)
+# - Robust worksheet selection via ONE sidebar selectbox stored in session_state
+# - Preflight checks for permissions + detailed error messages on save
 # ------------------------------------------------------------------------------
 
 import streamlit as st
@@ -89,15 +87,14 @@ ACC_LEDGER_COLS = [
 ]
 
 # Map registration columns (RIGHT side are headers in your registration sheet)
-# NOTE: Your registration sheet is in Arabic; keep your existing columns:
 REG_COLUMN_MAP = {
     "Registration_ID": "Registration_ID",          # if not present, we derive one
     "Student_Name": "الاسم",
     "Course": "الكورس",
     "Phone": "رقم اتصال ولي الأمر",
-    "PaymentPlan": "خطة الدفع",                    # e.g., "كامل" / "أقساط" (optional)
-    "InstallmentCount": "عدد الأقساط",             # (optional) numeric 1..6
-    "Total_Fee": "الرسوم الكلية"                   # (optional) numeric
+    "PaymentPlan": "خطة الدفع",                    # optional
+    "InstallmentCount": "عدد الأقساط",             # optional
+    "Total_Fee": "الرسوم الكلية"                   # optional
 }
 
 # =========================
@@ -162,7 +159,6 @@ def choose_registration_worksheet_once(sh):
         st.error(f"تعذر قراءة أوراق العمل: {e}")
         st.stop()
 
-    # Build candidate order
     desired = REG_WORKSHEET_NAME
     candidates = [desired, "Form Responses 1", "Sheet1", "الردود على النموذج 1"]
     chosen = None
@@ -176,11 +172,9 @@ def choose_registration_worksheet_once(sh):
             st.stop()
         chosen = titles[0]
 
-    # If not set yet, initialize session state
     if "reg_ws_title" not in st.session_state:
         st.session_state.reg_ws_title = chosen
 
-    # Render ONE selectbox (unique key) and update the state
     current_idx = titles.index(st.session_state.reg_ws_title) if st.session_state.reg_ws_title in titles else 0
     selected = st.sidebar.selectbox("اختر ورقة التسجيل", titles, index=current_idx, key="reg_ws_choice_unique")
     st.session_state.reg_ws_title = selected
@@ -203,7 +197,6 @@ def ensure_worksheet(sh, title: str, cols: list):
         ws = sh.add_worksheet(title=title, rows=1000, cols=max(len(cols), 10))
         ws.update([cols])
         return ws
-    # Ensure header matches
     existing_header = ws.row_values(1)
     if existing_header != cols:
         ws.delete_rows(1)
@@ -252,8 +245,7 @@ def generate_receipt_pdf(receipt_id: str, reg_row: dict, pay_amount: str,
     """Generate a simple PDF receipt."""
     buf = io.BytesIO()
     c = canvas.Canvas(buf, pagesize=A4)
-    w, h = A4
-    y = h - 20*mm
+    y = A4[1] - 20*mm
 
     def line(txt, dy=8*mm, font="Helvetica", size=11, bold=False, italic=False):
         nonlocal y
@@ -318,13 +310,11 @@ def _parse_paid_installments_from_ledger(ledger_df: pd.DataFrame, reg_id: str) -
 # =========================
 try:
     reg_sh = open_reg_spreadsheet()
-    # Create the SINGLE sidebar selector and store in session_state:
-    choose_registration_worksheet_once(reg_sh)
-    # Open the currently chosen worksheet without creating more widgets:
+    choose_registration_worksheet_once(reg_sh)  # sidebar selector (single)
     reg_ws = get_current_registration_worksheet(reg_sh)
     df = pd.DataFrame(reg_ws.get_all_records())
 except Exception as e:
-    st.error(f"❌ فشل في تحميل البيانات: {e}")
+    st.error(f"❌ Failed to load data: {e}")
     st.stop()
 
 # =========================
@@ -341,7 +331,6 @@ else:
 if role == "admin" and page == "لوحة المشرف":
     st.subheader("👤 لوحة المشرف")
 
-    # Sharing info
     with st.expander("🔗 مشاركة Google Sheet"):
         try:
             perms = reg_ws.spreadsheet.list_permissions()
@@ -357,7 +346,6 @@ if role == "admin" and page == "لوحة المشرف":
     col1, col2, col3 = st.columns(3)
     row_limit = col1.selectbox("عدد السجلات المعروضة", ["الكل", 5, 10, 20, 50])
     search_name = col2.text_input("🔍 البحث بالاسم أو الكورس")
-    # Handle potential absence of Arabic columns gracefully
     age_col = "العمر" if "العمر" in df.columns else None
     addr_col = "العنوان" if "العنوان" in df.columns else None
 
@@ -380,14 +368,8 @@ if role == "admin" and page == "لوحة المشرف":
     if search_name:
         name_col = "الاسم" if "الاسم" in df.columns else None
         course_col = "الكورس" if "الكورس" in df.columns else None
-        if name_col:
-            m1 = filtered_df[name_col].astype(str).str.contains(search_name, case=False, na=False)
-        else:
-            m1 = False
-        if course_col:
-            m2 = filtered_df[course_col].astype(str).str.contains(search_name, case=False, na=False)
-        else:
-            m2 = False
+        m1 = filtered_df[name_col].astype(str).str.contains(search_name, case=False, na=False) if name_col else False
+        m2 = filtered_df[course_col].astype(str).str.contains(search_name, case=False, na=False) if course_col else False
         filtered_df = filtered_df[m1 | m2] if (name_col or course_col) else filtered_df
 
     if age_filter != "الكل" and age_col:
@@ -400,7 +382,6 @@ if role == "admin" and page == "لوحة المشرف":
     else:
         st.dataframe(filtered_df.tail(int(row_limit)))
 
-    # TEXTUAL ANALYTICS (unchanged)
     st.subheader("📊 تحليلات نصية للتسجيل")
     chart_type = st.selectbox("اختر نوع التحليل", [
         "عدد المسجلين لكل كورس",
@@ -410,7 +391,7 @@ if role == "admin" and page == "لوحة المشرف":
         "المسجلين في أكثر من دورة"
     ])
 
-    total = len(df) if len(df) else 1  # avoid div/0
+    total = len(df) if len(df) else 1
 
     if chart_type == "عدد المسجلين لكل كورس":
         st.markdown("### 📘 توزيع الكورسات:")
@@ -456,7 +437,6 @@ if role == "admin" and page == "لوحة المشرف":
         else:
             st.info("أعمدة مطلوبة غير موجودة: 'الاسم' و/أو 'الكورس'")
 
-    st.markdown("### 💰 الانتقال إلى صفحة مراقبة الحسابات والمدفوعات")
     st.info("استخدم القائمة الجانبية → 'المحاسبة والمدفوعات'.")
 
 # =========================
@@ -466,8 +446,25 @@ if role == "admin" and page == "المحاسبة والمدفوعات":
     st.subheader("💳 المحاسبة والمدفوعات")
 
     # Ensure accounting worksheets inside the SAME spreadsheet
-    ws_master = ensure_worksheet(reg_sh, ACCOUNTING_MASTER_WS, ACC_MASTER_COLS)
-    ws_ledger = ensure_worksheet(reg_sh, PAYMENTS_LEDGER_WS, ACC_LEDGER_COLS)
+    try:
+        ws_master = ensure_worksheet(reg_sh, ACCOUNTING_MASTER_WS, ACC_MASTER_COLS)
+        ws_ledger = ensure_worksheet(reg_sh, PAYMENTS_LEDGER_WS, ACC_LEDGER_COLS)
+    except Exception as e:
+        st.error(f"❌ Cannot ensure accounting worksheets: {e}")
+        st.stop()
+
+    # Preflight permission check (useful on first run)
+    with st.expander("Preflight"):
+        try:
+            perms = reg_ws.spreadsheet.list_permissions()
+            sa_email = dict(st.secrets.get("gcp_service_account", {})).get("client_email", "unknown@service-account")
+            emails = [p.get("emailAddress") for p in perms if "emailAddress" in p]
+            if sa_email in emails:
+                st.success(f"Service account has access: {sa_email}")
+            else:
+                st.warning(f"Share the spreadsheet with: {sa_email} (Editor)")
+        except Exception as e:
+            st.info(f"Could not read permissions: {e}")
 
     # Reuse the chosen worksheet WITHOUT creating another selectbox:
     reg_ws = get_current_registration_worksheet(reg_sh)
@@ -508,7 +505,7 @@ if role == "admin" and page == "المحاسبة والمدفوعات":
         "Student_Name": get_val(sel_row, "Student_Name"),
         "Course": get_val(sel_row, "Course"),
         "Phone": get_val(sel_row, "Phone"),
-        "PaymentPlan": get_val(sel_row, "PaymentPlan") or "أقساط",  # default "Installments"
+        "PaymentPlan": get_val(sel_row, "PaymentPlan") or "أقساط",
         "InstallmentCount": None,
         "Total_Fee": 0.0,
     }
@@ -537,10 +534,7 @@ if role == "admin" and page == "المحاسبة والمدفوعات":
 
     paid_to_date = _to_float(existing.get("Paid_To_Date")) if existing else 0.0
 
-    # Determine effective total fee:
-    # - If accounting master already has a fee, use it
-    # - Else, if registration has a fee (>0), use it
-    # - Else, default to FULL_PRICE so math works out-of-the-box
+    # Determine effective total fee (prefer master, then registration, else FULL_PRICE)
     existing_total = _to_float(existing.get("Total_Fee")) if existing else 0.0
     if existing_total > 0:
         effective_total_fee = existing_total
@@ -575,26 +569,26 @@ if role == "admin" and page == "المحاسبة والمدفوعات":
     st.subheader("تسجيل عملية دفع")
     admin_name = st.text_input("مدخل البيانات (المشرف)", value="")
 
-    pay_mode = st.radio("نوع الدفع", ["مكتمل (90)", "أقساط (15 لكل قسط)"], index=0 if math.isclose(remaining, effective_total_fee, abs_tol=1e-6) else 1)
+    pay_mode = st.radio(
+        "نوع الدفع",
+        ["مكتمل (90)", "أقساط (15 لكل قسط)"],
+        index=0 if math.isclose(remaining, effective_total_fee, abs_tol=1e-6) else 1
+    )
 
+    # Compute amount and installment selections
     pay_amount = 0.0
     inst_selected = []
 
     if pay_mode.startswith("مكتمل"):
-        # Full payment always equals FULL_PRICE by business rule
-        pay_amount = FULL_PRICE
-
-        # If some amount is already paid, make sure we don't exceed total
-        if effective_total_fee > 0 and (paid_to_date + pay_amount) - effective_total_fee > 1e-6:
-            st.error("دفعة مكتملة 90 ستتجاوز إجمالي الرسوم لهذا الطالب. استخدم الأقساط بدلاً من ذلك.")
-            st.stop()
-
+        # Charge up to the remaining toward 90 (never exceed effective_total_fee)
+        pay_amount = min(FULL_PRICE, remaining if effective_total_fee > 0 else FULL_PRICE)
+        if pay_amount <= 0:
+            st.warning("لا يوجد رصيد متبقٍ لدفع كامل.")
     else:
         st.caption("اختر الأقساط المدفوعة الآن (يمكن اختيار أكثر من قسط). الأقساط المدفوعة مسبقًا مقفلة.")
         cols = st.columns(MAX_INSTALLMENTS)
         for i in range(1, MAX_INSTALLMENTS + 1):
             paid_already = i in already_paid
-            # checked=True if already paid; disabled to avoid duplicates
             with cols[i-1]:
                 checked = st.checkbox(str(i), value=paid_already, disabled=paid_already, key=f"inst_{i}")
             if checked and not paid_already:
@@ -602,56 +596,100 @@ if role == "admin" and page == "المحاسبة والمدفوعات":
 
         count = len(inst_selected)
         pay_amount = INSTALLMENT_PRICE * count
-
         st.info(f"الأقساط المختارة: {', '.join(map(str, inst_selected)) if inst_selected else 'لا شيء'} — المبلغ = {pay_amount:.2f}")
 
-        if count == 0:
-            st.warning("اختر قسطًا واحدًا على الأقل لتسجيل الدفع.")
-
-        # Overpay guard against remaining (if a total fee is defined)
-        if effective_total_fee > 0 and (paid_to_date + pay_amount) - effective_total_fee > 1e-6:
+        # Predict overpay (only if a total fee is defined)
+        would_overpay = effective_total_fee > 0 and (paid_to_date + pay_amount) - effective_total_fee > 1e-6
+        if would_overpay:
             st.error("المبلغ الحالي سيتجاوز إجمالي الرسوم. قلّل عدد الأقساط المختارة.")
-            st.stop()
+            inst_selected = []  # prevent save
+            pay_amount = 0.0
 
     pay_method = st.selectbox("طريقة السداد", ["نقدًا", "تحويل بنكي", "نقاط بيع", "أخرى"])
     pay_note = st.text_input("ملاحظة (اختياري)")
+
+    # Debug panel to help diagnose if saving "doesn't work"
+    with st.expander("Debug (computed values)"):
+        st.write({
+            "effective_total_fee": effective_total_fee,
+            "paid_to_date": paid_to_date,
+            "remaining": remaining,
+            "pay_mode": pay_mode,
+            "inst_selected": inst_selected,
+            "pay_amount": pay_amount
+        })
 
     # Disable button if amount is zero or (installments chosen but none selected)
     btn_disabled = (pay_amount <= 0) or (pay_mode.startswith("أقساط") and len(inst_selected) == 0)
 
     if st.button("حفظ وإنشاء إيصال", type="primary", disabled=btn_disabled):
-        new_paid_to_date = paid_to_date + pay_amount
-        new_remaining = max(effective_total_fee - new_paid_to_date, 0.0)
+        try:
+            new_paid_to_date = paid_to_date + pay_amount
+            new_remaining = max(effective_total_fee - new_paid_to_date, 0.0)
+            new_status = "Completed" if math.isclose(new_remaining, 0.0, abs_tol=1e-6) else "Installments"
 
-        new_status = "Completed" if math.isclose(new_remaining, 0.0, abs_tol=1e-6) else "Installments"
+            # Build ledger entry
+            receipt_id = f"RCPT-{datetime.now().strftime('%Y%m%d')}-{uuid.uuid4().hex[:8].upper()}"
+            inst_field = "" if pay_mode.startswith("مكتمل") else ",".join(map(str, inst_selected))
 
-        # Upsert master using the effective fee
-        master_row = {
-            "Registration_ID": reg_row["Registration_ID"],
-            "Student_Name": reg_row["Student_Name"],
-            "Course": reg_row["Course"],
-            "Phone": reg_row["Phone"],
-            "PaymentPlan": "Full" if pay_mode.startswith("مكتمل") else "Installments",
-            "InstallmentCount": str(MAX_INSTALLMENTS),
-            "Total_Fee": f"{effective_total_fee:.2f}",
-            "Paid_To_Date": f"{new_paid_to_date:.2f}",
-            "Remaining": f"{new_remaining:.2f}",
-            "Status": new_status,
-            "LastPaymentDate": datetime.now().strftime("%Y-%m-%d %H:%M"),
-            "LastReceiptID": ""  # fill after receipt creation
-        }
+            ledger_row = {
+                "Receipt_ID": receipt_id,
+                "Registration_ID": reg_row["Registration_ID"],
+                "Payment_Date": datetime.now().strftime("%Y-%m-%d %H:%M"),
+                "Amount": f"{pay_amount:.2f}",
+                "Method": pay_method,
+                "Note": pay_note,
+                "Entered_By": admin_name,
+                "Installment_Number": inst_field
+            }
+            append_ledger_row(ws_ledger, ledger_row)
 
-        # Build ledger entry
-        receipt_id = f"RCPT-{datetime.now().strftime('%Y%m%d')}-{uuid.uuid4().hex[:8].upper()}"
-        inst_field = "" if pay_mode.startswith("مكتمل") else ",".join(map(str, inst_selected))
+            # Upsert master using the effective fee
+            master_row = {
+                "Registration_ID": reg_row["Registration_ID"],
+                "Student_Name": reg_row["Student_Name"],
+                "Course": reg_row["Course"],
+                "Phone": reg_row["Phone"],
+                "PaymentPlan": "Full" if pay_mode.startswith("مكتمل") else "Installments",
+                "InstallmentCount": str(MAX_INSTALLMENTS),
+                "Total_Fee": f"{effective_total_fee:.2f}",
+                "Paid_To_Date": f"{new_paid_to_date:.2f}",
+                "Remaining": f"{new_remaining:.2f}",
+                "Status": new_status,
+                "LastPaymentDate": datetime.now().strftime("%Y-%m-%d %H:%M"),
+                "LastReceiptID": ""  # filled after receipt creation
+            }
+            upsert_master_row(ws_master, master_row)
 
-        ledger_row = {
-            "Receipt_ID": receipt_id,
-            "Registration_ID": reg_row["Registration_ID"],
-            "Payment_Date": datetime.now().strftime("%Y-%m-%d %H:%M"),
-            "Amount": f"{pay_amount:.2f}",
-            "Method": pay_method,
-            "Note": pay_note,
-            "Entered_By": admin_name,
-            "Installment_Number": inst_field
-        }
+            # Generate receipt
+            pdf_buf = generate_receipt_pdf(
+                receipt_id=receipt_id,
+                reg_row=reg_row,
+                pay_amount=f"{pay_amount:.2f}",
+                pay_method=pay_method,
+                remaining=f"{new_remaining:.2f}",
+                installment_no=(inst_field if inst_field else None),
+                entered_by=admin_name or "Admin"
+            )
+
+            st.success(f"تم تسجيل الدفع. تم إنشاء الإيصال {receipt_id}.")
+            st.download_button(
+                label="📄 تنزيل الإيصال (PDF)",
+                data=pdf_buf,
+                file_name=f"{receipt_id}.pdf",
+                mime="application/pdf"
+            )
+
+            st.rerun()
+
+        except Exception as e:
+            st.error("Saving failed. See details below.")
+            st.exception(e)  # show traceback in the UI to avoid silent failures
+
+# =========================
+# POWER USERS (as old)
+# =========================
+if role == "power" and page == "بيانات التسجيل":
+    st.subheader("📊 بيانات التسجيل")
+    st.dataframe(df)
+    st.download_button("📥 تحميل البيانات", data=df.to_csv(index=False), file_name="TAC_Registrations.csv")

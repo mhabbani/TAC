@@ -1,9 +1,9 @@
 # ------------------------------------------------------------------------------
 # author : Mohamed Habbani
-# version : v1.0.0
-# date : 2025-08-15 16:00 EDT
+# version : v1.0.1
+# date : 2025-08-15 11:10 EDT
 #
-# File: tac_admin.py
+# File: tac_admin_app.py
 # TAC Admin Panel (Arabic RTL) + Accounting & Receipts inside the same spreadsheet
 # ------------------------------------------------------------------------------
 # - Preserves old admin features (login, RTL UI, filters, analytics, sharing view)
@@ -14,7 +14,8 @@
 #     * "Payments_Ledger"  -> one row per payment/receipt
 # - Supports Completed or Installments (1–6), prevents overpayment
 # - Generates PDF receipts for each payment (download)
-# - Robust worksheet selection (secrets → common names → first sheet) + sidebar override
+# - Robust worksheet selection (secrets → common names → first sheet) via ONE sidebar selectbox
+#   stored in session_state to avoid duplicate widget keys
 # ------------------------------------------------------------------------------
 
 import streamlit as st
@@ -142,37 +143,50 @@ def open_reg_spreadsheet():
     """Open the registration spreadsheet by name."""
     return client.open(REG_SPREADSHEET_NAME)
 
-def pick_registration_worksheet(sh):
-    """Pick the correct registration worksheet robustly + allow override from sidebar."""
+def choose_registration_worksheet_once(sh):
+    """
+    Create ONE sidebar selectbox for picking the registration worksheet.
+    Store the choice in session_state ('reg_ws_title') and reuse it everywhere.
+    """
     try:
         titles = [ws.title for ws in sh.worksheets()]
     except Exception as e:
         st.error(f"تعذر قراءة أوراق العمل: {e}")
         st.stop()
 
-    # preferred from secrets (if provided)
+    # Build candidate order
     desired = REG_WORKSHEET_NAME
-
-    # common candidates (en/ar)
     candidates = [desired, "Form Responses 1", "Sheet1", "الردود على النموذج 1"]
     chosen = None
     for name in candidates:
         if name and name in titles:
             chosen = name
             break
-
     if not chosen:
         if not titles:
             st.error("لا توجد أي أوراق عمل داخل الملف.")
             st.stop()
-        chosen = titles[0]  # fallback to first sheet
+        chosen = titles[0]
 
-    # allow override via sidebar
-    idx = titles.index(chosen) if chosen in titles else 0
-    chosen = st.sidebar.selectbox("اختر ورقة التسجيل", titles, index=idx, key="reg_ws_choice")
+    # If not set yet, initialize session state
+    if "reg_ws_title" not in st.session_state:
+        st.session_state.reg_ws_title = chosen
 
-    st.caption(f"📄 تم استخدام ورقة: **{chosen}**")
-    return sh.worksheet(chosen)
+    # Render ONE selectbox (unique key) and update the state
+    current_idx = titles.index(st.session_state.reg_ws_title) if st.session_state.reg_ws_title in titles else 0
+    selected = st.sidebar.selectbox("اختر ورقة التسجيل", titles, index=current_idx, key="reg_ws_choice_unique")
+    st.session_state.reg_ws_title = selected
+
+    st.caption(f"📄 Using worksheet: **{st.session_state.reg_ws_title}**")
+    return st.session_state.reg_ws_title
+
+def get_current_registration_worksheet(sh):
+    """Open the worksheet currently stored in session_state without rendering widgets."""
+    title = st.session_state.get("reg_ws_title")
+    if not title:
+        # Should not happen if choose_registration_worksheet_once was called
+        return sh.sheet1
+    return sh.worksheet(title)
 
 def ensure_worksheet(sh, title: str, cols: list):
     """Ensure worksheet exists with the expected header (creates if missing)."""
@@ -271,11 +285,14 @@ def generate_receipt_pdf(receipt_id: str, reg_row: dict, pay_amount: str,
     return buf
 
 # =========================
-# LOAD REGISTRATIONS (robust)
+# LOAD REGISTRATIONS (robust, with ONE selector)
 # =========================
 try:
     reg_sh = open_reg_spreadsheet()
-    reg_ws = pick_registration_worksheet(reg_sh)
+    # Create the SINGLE sidebar selector and store in session_state:
+    choose_registration_worksheet_once(reg_sh)
+    # Open the currently chosen worksheet without creating more widgets:
+    reg_ws = get_current_registration_worksheet(reg_sh)
     df = pd.DataFrame(reg_ws.get_all_records())
 except Exception as e:
     st.error(f"❌ فشل في تحميل البيانات: {e}")
@@ -423,8 +440,8 @@ if role == "admin" and page == "المحاسبة والمدفوعات":
     ws_master = ensure_worksheet(reg_sh, ACCOUNTING_MASTER_WS, ACC_MASTER_COLS)
     ws_ledger = ensure_worksheet(reg_sh, PAYMENTS_LEDGER_WS, ACC_LEDGER_COLS)
 
-    # Reload registrations fresh for accounting page (respect the same chosen worksheet)
-    reg_ws = pick_registration_worksheet(reg_sh)
+    # Reuse the chosen worksheet WITHOUT creating another selectbox:
+    reg_ws = get_current_registration_worksheet(reg_sh)
     reg_df = pd.DataFrame(reg_ws.get_all_records())
     if reg_df.empty:
         st.warning("لا توجد تسجيلات حالياً.")

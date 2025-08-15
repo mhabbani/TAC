@@ -8,6 +8,7 @@
 # - Supports Completed or Installments (1–6)
 # - Prevents overpayment
 # - Generates PDF receipts for download
+# - Preflight check for secrets & permissions
 # ------------------------------------------------------------
 
 import streamlit as st
@@ -65,6 +66,7 @@ COLUMN_MAP = {
 # SECRETS & SAFETY
 # ---------------------------
 def need(section: str, key: str) -> str:
+    """Fail-fast getter for st.secrets."""
     val = st.secrets.get(section, {}).get(key)
     if not val:
         st.error(
@@ -166,67 +168,27 @@ def append_ledger_row(ws_ledger, row_dict: dict):
     ws_ledger.append_row(values)
 
 # ---------------------------
-# DATA LOADERS
+# PREFLIGHT CHECKS
 # ---------------------------
-@st.cache_data(show_spinner=True, ttl=60)
-def load_registration_df() -> pd.DataFrame:
-    reg_sh = gc.open(REG_SHEET_NAME)
-    reg_ws = reg_sh.worksheet(REG_WORKSHEET)
-    df = pd.DataFrame(reg_ws.get_all_records())
-    return df
+with st.expander("Preflight (troubleshooting)"):
+    st.write("• Checking access to Registration and Accounting spreadsheets...")
+    ok = True
+    try:
+        _ = gc.open(REG_SHEET_NAME)
+        st.success(f"Registration spreadsheet OK: {REG_SHEET_NAME}")
+    except Exception as e:
+        ok = False
+        st.error(f"Cannot open Registration spreadsheet [{REG_SHEET_NAME}]. Share it with the service account. Details: {e}")
 
-def get_val(src: dict, logical_key: str, default: str = "") -> str:
-    """Safely map logical column name to actual registration column name"""
-    actual = COLUMN_MAP.get(logical_key, logical_key)
-    return str(src.get(actual, default)).strip()
+    try:
+        _ = open_sheet(ACC_SPREADSHEET)
+        st.success(f"Accounting spreadsheet OK / will be created if missing: {ACC_SPREADSHEET}")
+    except Exception as e:
+        ok = False
+        st.error(f"Cannot open/create Accounting spreadsheet [{ACC_SPREADSHEET}]. Details: {e}")
 
-# ---------------------------
-# PDF RECEIPT
-# ---------------------------
-def generate_receipt_pdf(receipt_id: str, reg_row: dict, pay_amount: str,
-                         pay_method: str, remaining: str, installment_no, entered_by: str) -> io.BytesIO:
-    buf = io.BytesIO()
-    c = canvas.Canvas(buf, pagesize=A4)
-    w, h = A4
-
-    y = h - 20*mm
-
-    def line(txt, dy=8*mm, font="Helvetica", size=11, bold=False, italic=False):
-        nonlocal y
-        if bold and italic:
-            c.setFont("Helvetica-BoldOblique", size)
-        elif bold:
-            c.setFont("Helvetica-Bold", size)
-        elif italic:
-            c.setFont("Helvetica-Oblique", size)
-        else:
-            c.setFont(font, size)
-        c.drawString(20*mm, y, txt)
-        y -= dy
-
-    line("Together Academic Center (TAC) – Payment Receipt", dy=12*mm, bold=True, size=16)
-    line(f"Receipt ID: {receipt_id}")
-    line(f"Date: {datetime.now().strftime('%Y-%m-%d %H:%M')}")
-    line(f"Student: {reg_row.get('Student_Name','')}")
-    line(f"Course: {reg_row.get('Course','')}")
-    line(f"Phone: {reg_row.get('Phone','')}")
-    line(f"Registration ID: {reg_row.get('Registration_ID','')}")
-    line("")
-
-    line("Payment Details", dy=10*mm, bold=True, size=12)
-    line(f"Amount Paid: {pay_amount}")
-    line(f"Method: {pay_method}")
-    if installment_no:
-        line(f"Installment Number: {installment_no}")
-    line(f"Remaining Balance: {remaining}")
-    line(f"Entered By: {entered_by or 'Admin'}")
-    line("")
-    line("Thank you for your payment.", italic=True, size=10, dy=12*mm)
-
-    c.showPage()
-    c.save()
-    buf.seek(0)
-    return buf
+    if not ok:
+        st.stop()
 
 # ---------------------------
 # OPEN / ENSURE ACCOUNTING SHEETS
@@ -238,6 +200,13 @@ ws_ledger = ensure_worksheet(acc_sh, ACC_LEDGER_WS, ACC_LEDGER_COLS)
 # ---------------------------
 # LOAD REGISTRATIONS (READ-ONLY)
 # ---------------------------
+@st.cache_data(show_spinner=True, ttl=60)
+def load_registration_df() -> pd.DataFrame:
+    reg_sh = gc.open(REG_SHEET_NAME)
+    reg_ws = reg_sh.worksheet(REG_WORKSHEET)
+    df = pd.DataFrame(reg_ws.get_all_records())
+    return df
+
 with st.spinner("Loading registrations..."):
     reg_df = load_registration_df()
 
@@ -247,7 +216,6 @@ if reg_df.empty:
 
 # If Registration_ID is missing in your registrations, derive a temporary one (timestamp + last4 phone)
 if "Registration_ID" not in reg_df.columns:
-    # Try Timestamp else index; try Phone else index suffix
     ts = reg_df.get("Timestamp", pd.Series(range(len(reg_df)))).astype(str).str.replace(r"\D", "", regex=True)
     phone = reg_df.get(COLUMN_MAP["Phone"], pd.Series(range(len(reg_df)))).astype(str).str[-4:]
     reg_df["Registration_ID"] = ts + "-" + phone
@@ -266,6 +234,10 @@ selected_label = st.selectbox("Select a registration", sorted(reg_df["_label"].t
 sel_row = reg_df[reg_df["_label"] == selected_label].iloc[0].to_dict()
 
 # Extract mapped fields
+def get_val(src: dict, logical_key: str, default: str = "") -> str:
+    actual = COLUMN_MAP.get(logical_key, logical_key)
+    return str(src.get(actual, default)).strip()
+
 reg_row = {
     "Registration_ID": sel_row["Registration_ID"],
     "Student_Name": get_val(sel_row, "Student_Name"),
@@ -437,3 +409,51 @@ if st.button("Save & Generate Receipt", type="primary", disabled=btn_disabled):
     st.rerun()
 
 st.caption("Notes: Registration sheet remains read-only. All financial records are stored in the separate TAC-Accounting spreadsheet.")
+
+# ---------------------------
+# PDF RECEIPT FUNC
+# ---------------------------
+def generate_receipt_pdf(receipt_id: str, reg_row: dict, pay_amount: str,
+                         pay_method: str, remaining: str, installment_no, entered_by: str) -> io.BytesIO:
+    buf = io.BytesIO()
+    c = canvas.Canvas(buf, pagesize=A4)
+    w, h = A4
+
+    y = h - 20*mm
+
+    def line(txt, dy=8*mm, font="Helvetica", size=11, bold=False, italic=False):
+        nonlocal y
+        if bold and italic:
+            c.setFont("Helvetica-BoldOblique", size)
+        elif bold:
+            c.setFont("Helvetica-Bold", size)
+        elif italic:
+            c.setFont("Helvetica-Oblique", size)
+        else:
+            c.setFont(font, size)
+        c.drawString(20*mm, y, txt)
+        y -= dy
+
+    line("Together Academic Center (TAC) – Payment Receipt", dy=12*mm, bold=True, size=16)
+    line(f"Receipt ID: {receipt_id}")
+    line(f"Date: {datetime.now().strftime('%Y-%m-%d %H:%M')}")
+    line(f"Student: {reg_row.get('Student_Name','')}")
+    line(f"Course: {reg_row.get('Course','')}")
+    line(f"Phone: {reg_row.get('Phone','')}")
+    line(f"Registration ID: {reg_row.get('Registration_ID','')}")
+    line("")
+
+    line("Payment Details", dy=10*mm, bold=True, size=12)
+    line(f"Amount Paid: {pay_amount}")
+    line(f"Method: {pay_method}")
+    if installment_no:
+        line(f"Installment Number: {installment_no}")
+    line(f"Remaining Balance: {remaining}")
+    line(f"Entered By: {entered_by or 'Admin'}")
+    line("")
+    line("Thank you for your payment.", italic=True, size=10, dy=12*mm)
+
+    c.showPage()
+    c.save()
+    buf.seek(0)
+    return buf

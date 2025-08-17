@@ -91,11 +91,6 @@ METHOD_CHOICES = ["Cash", "Bank transfer - Sudan", "Bank transfer - Saudi"]
 
 # Normalize legacy/Arabic entries while displaying/preselecting
 METHOD_DISPLAY_MAP = {
-    "نقدًا": "Cash",
-    "نقدا": "Cash",
-    "تحويل بنكي": "Bank transfer - Sudan",
-    "نقاط بيع": "Cash",
-    # pass-through English:
     "Cash": "Cash",
     "Bank transfer - Sudan": "Bank transfer - Sudan",
     "Bank transfer - Saudi": "Bank transfer - Saudi",

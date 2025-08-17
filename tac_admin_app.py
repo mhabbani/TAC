@@ -100,7 +100,7 @@ METHOD_DISPLAY_MAP = {
     "السعودية": "Bank transfer - Saudi",
     "السودان": "Bank transfer - Sudan",
     "نقاط بيع": "Cash",
-    "POS":"Bank transfer - Saudi",
+    "POS": "Cash",
 }
 
 def normalize_method_value(val: str) -> str:
@@ -882,4 +882,220 @@ def recalc_master_for_registration(ws_master, ws_ledger, reg_id: str, reg_df: pd
     else:
         ws_master.append_row(row_vals)
 
-    _cache_set("master_df", read_ws_df_cached(ws_master, "master_df", ttl_sec=0))_
+    _cache_set("master_df", read_ws_df_cached(ws_master, "master_df", ttl_sec=0))
+
+if role == "admin" and page == "التصحيحات والتعديلات":
+    st.subheader("🛠️ التصحيحات والتعديلات")
+
+    ws_master, ws_ledger = ensure_accounting_tabs_once()
+    reg_df = derive_registration_id(read_ws_df_cached(reg_ws, "reg_df", ttl_sec=180))
+    ledger_df = read_ws_df_cached(ws_ledger, "ledger_df", ttl_sec=60)
+    ledger_df = normalize_ledger_columns(ledger_df)
+
+    if ledger_df.empty:
+        st.info("لا توجد إيصالات في الدفتر بعد."); st.stop()
+
+    # reg_id -> name
+    reg_map = {}
+    if not reg_df.empty:
+        name_col = REG_COLUMN_MAP["Student_Name"]
+        for _, r in reg_df.iterrows():
+            reg_map[str(r.get("Registration_ID",""))] = str(r.get(name_col, ""))
+
+    # sort desc by date
+    if "Payment_Date" in ledger_df.columns:
+        try:
+            ledger_df["_dt"] = pd.to_datetime(ledger_df["Payment_Date"], errors="coerce")
+            ledger_df = ledger_df.sort_values("_dt", ascending=False, na_position="last")
+        except Exception:
+            pass
+
+    def _label_row(row):
+        rid = str(row.get("Receipt_ID",""))
+        reg_id = str(row.get("Registration_ID",""))
+        nm = reg_map.get(reg_id, "")
+        amt = str(row.get("Amount",""))
+        dt  = str(row.get("Payment_Date",""))
+        meth = normalize_method_value(row.get("Method",""))
+        return f"{rid} — {reg_id}{(' / ' + nm) if nm else ''} — {amt} USD — {meth} — {dt}"
+
+    options = [ _label_row(r) for _, r in ledger_df.iterrows() ]
+    selected_receipt_label = st.selectbox("اختر إيصالًا لتعديله/حذفه", options)
+    sel_idx = options.index(selected_receipt_label)
+    sel_row = ledger_df.iloc[sel_idx].to_dict()
+
+    # Editable fields
+    st.markdown("### ✏️ تعديل بيانات الإيصال")
+    st.text_input("Receipt ID (غير قابل للتعديل)", value=sel_row.get("Receipt_ID",""), disabled=True, key="edit_receipt_id")
+    reg_id_val = st.text_input("Registration ID", value=sel_row.get("Registration_ID",""))
+    pay_date_val = st.text_input("Payment Date (YYYY-MM-DD HH:MM)", value=sel_row.get("Payment_Date",""))
+    amount_val = st.number_input("Amount (USD)", min_value=0.0, step=5.0, format="%.2f", value=_to_float(sel_row.get("Amount",0)))
+
+    # Method in English only (preselect normalized)
+    orig_method = normalize_method_value(sel_row.get("Method", "Cash"))
+    idx = METHOD_CHOICES.index(orig_method) if orig_method in METHOD_CHOICES else 0
+    method_val = st.selectbox("Payment method", METHOD_CHOICES, index=idx)
+
+    note_val = st.text_input("Note", value=sel_row.get("Note",""))
+    entered_by_val = st.text_input("Entered By", value=sel_row.get("Entered_By",""))
+    inst_val = st.text_input("Installment Number(s) e.g. 1,2,3", value=sel_row.get("Installment_Number",""))
+
+    c1, c2 = st.columns(2)
+    with c1:
+        if st.button("💾 Save changes"):
+            try:
+                inst_clean = ",".join([p.strip() for p in inst_val.split(",") if p.strip()])
+                if inst_clean and not all(p.isdigit() and 1 <= int(p) <= MAX_INSTALLMENTS for p in inst_clean.split(",")):
+                    st.error(f"Installment numbers must be between 1 and {MAX_INSTALLMENTS}."); st.stop()
+
+                rownum = find_ledger_rownum_by_receipt(ws_ledger, ledger_df, sel_row.get("Receipt_ID",""))
+                if not rownum:
+                    st.error("لم يتم العثور على صف هذا الإيصال في الورقة."); st.stop()
+
+                updated_vals = [
+                    sel_row.get("Receipt_ID",""),
+                    reg_id_val,
+                    pay_date_val,
+                    f"{amount_val:.2f}",
+                    method_val,         # English normalized
+                    note_val,
+                    entered_by_val,
+                    inst_clean
+                ]
+                last_col_letter = chr(64 + len(ACC_LEDGER_COLS))
+                ws_ledger.update(f"A{rownum}:{last_col_letter}{rownum}", [updated_vals])
+
+                recalc_master_for_registration(ws_master, ws_ledger, reg_id_val, reg_df)
+
+                # refresh caches
+                _cache_set("ledger_df", read_ws_df_cached(ws_ledger, "ledger_df", ttl_sec=0))
+                _cache_set("master_df", read_ws_df_cached(ws_master, "master_df", ttl_sec=0))
+
+                st.success("تم حفظ التعديلات وإعادة احتساب الرصيد.")
+                st.rerun()
+            except Exception as e:
+                st.error("فشل حفظ التعديلات.")
+                st.exception(e)
+
+    with c2:
+        st.markdown("### 🗑️ حذف الإيصال")
+        confirm = st.checkbox("أؤكد حذف هذا الإيصال نهائيًا")
+        if st.button("Delete receipt", type="secondary", disabled=not confirm):
+            try:
+                rownum = find_ledger_rownum_by_receipt(ws_ledger, ledger_df, sel_row.get("Receipt_ID",""))
+                if not rownum:
+                    st.error("لم يتم العثور على صف هذا الإيصال في الورقة."); st.stop()
+                ws_ledger.delete_rows(rownum)
+
+                recalc_master_for_registration(ws_master, ws_ledger, sel_row.get("Registration_ID",""), reg_df)
+
+                _cache_set("ledger_df", read_ws_df_cached(ws_ledger, "ledger_df", ttl_sec=0))
+                _cache_set("master_df", read_ws_df_cached(ws_master, "master_df", ttl_sec=0))
+
+                st.success("تم حذف الإيصال وإعادة احتساب الرصيد.")
+                st.rerun()
+            except Exception as e:
+                st.error("فشل حذف الإيصال.")
+                st.exception(e)
+
+# =========================
+# RECEIPTS PAGE (history & re-download)
+# =========================
+if role == "admin" and page == "الإيصالات / Receipts":
+    st.subheader("🧾 الإيصالات / Receipts")
+    ws_master, ws_ledger = ensure_accounting_tabs_once()
+    reg_df = derive_registration_id(read_ws_df_cached(reg_ws, "reg_df", ttl_sec=180))
+    master_df = read_ws_df_cached(ws_master, "master_df", ttl_sec=60)
+    ledger_df = read_ws_df_cached(ws_ledger, "ledger_df", ttl_sec=60)
+    ledger_df = normalize_ledger_columns(ledger_df)
+
+    if ledger_df.empty:
+        st.info("لا توجد إيصالات مسجلة بعد."); st.stop()
+
+    reg_ids = sorted(set(map(str, ledger_df.get("Registration_ID", []))))
+    reg_name_map = {}
+    if not reg_df.empty:
+        name_col = REG_COLUMN_MAP["Student_Name"]
+        for _, r in reg_df.iterrows():
+            reg_name_map[str(r.get("Registration_ID",""))] = str(r.get(name_col,""))
+
+    labels = [f"{rid} — {reg_name_map.get(str(rid),'')}" for rid in reg_ids if str(rid)]
+    chosen = st.selectbox("اختر الطالب / Registration", labels)
+    chosen_reg_id = reg_ids[labels.index(chosen)] if labels else ""
+
+    if not master_df.empty and "Registration_ID" in master_df.columns and chosen_reg_id:
+        ex = master_df[master_df["Registration_ID"] == chosen_reg_id]
+    else:
+        ex = pd.DataFrame()
+    if not ex.empty:
+        eff_total = _to_float(ex.iloc[0].get("Total_Fee", FULL_PRICE)) or FULL_PRICE
+        student_name = ex.iloc[0].get("Student_Name","")
+        course = ex.iloc[0].get("Course","")
+        phone  = ex.iloc[0].get("Phone","")
+    else:
+        eff_total = FULL_PRICE
+        row = reg_df[reg_df["Registration_ID"] == chosen_reg_id].iloc[0] if (chosen_reg_id and not reg_df.empty and (reg_df["Registration_ID"] == chosen_reg_id).any()) else {}
+        student_name = str(row.get(REG_COLUMN_MAP["Student_Name"], "")) if isinstance(row, dict) else ""
+        course = str(row.get(REG_COLUMN_MAP["Course"], "")) if isinstance(row, dict) else ""
+        phone  = str(row.get(REG_COLUMN_MAP["Phone"], "")) if isinstance(row, dict) else ""
+
+    sub = ledger_df[ledger_df["Registration_ID"] == chosen_reg_id].copy() if chosen_reg_id else pd.DataFrame()
+    try:
+        sub["_dt"] = pd.to_datetime(sub["Payment_Date"], errors="coerce")
+        sub = sub.sort_values("_dt", ascending=True, na_position="last")
+    except Exception:
+        sub["_dt"] = None
+    sub["PaidCum"] = sub["Amount"].apply(_to_float).cumsum()
+    sub["RemainingAtThis"] = (eff_total - sub["PaidCum"]).clip(lower=0)
+    try:
+        sub = sub.sort_values("_dt", ascending=False, na_position="last")
+    except Exception:
+        pass
+
+    st.markdown(
+        f"**Student:** {to_latin_if_arabic(student_name) if TEXT_MODE_KEY=='latin' else student_name} — "
+        f"**Course:** {to_latin_if_arabic(course) if TEXT_MODE_KEY=='latin' else course} — "
+        f"**Phone:** {to_latin_if_arabic(phone) if TEXT_MODE_KEY=='latin' else phone} — "
+        f"**Total:** {usd(eff_total)}"
+    )
+
+    for _, r in sub.iterrows():
+        rid = r.get("Receipt_ID","")
+        dt  = r.get("Payment_Date","")
+        amt = _to_float(r.get("Amount",0))
+        inst= r.get("Installment_Number","")
+        meth= normalize_method_value(r.get("Method",""))
+        remaining_at = _to_float(r.get("RemainingAtThis", eff_total))
+
+        cA, cB = st.columns([3,1])
+        with cA:
+            st.write(f"**{rid}** — {dt} — {usd(amt)} — {meth} — أقساط: {inst or '—'} — Remaining after this: {usd(remaining_at)}")
+        with cB:
+            reg_row_print = {
+                "Registration_ID": chosen_reg_id,
+                "Student_Name": to_latin_if_arabic(student_name) if TEXT_MODE_KEY=="latin" else student_name,
+                "Course": to_latin_if_arabic(course) if TEXT_MODE_KEY=="latin" else course,
+                "Phone": to_latin_if_arabic(phone) if TEXT_MODE_KEY=="latin" else phone,
+            }
+            logo_bytes = st.session_state.get("tac_logo_bytes")
+            pdf_buf = generate_receipt_pdf(
+                receipt_id=rid,
+                reg_row=reg_row_print,
+                pay_amount=f"{amt:.2f} USD",
+                pay_method=meth,
+                remaining=f"{remaining_at:.2f} USD",
+                installment_no=(inst if inst else None),
+                entered_by="Admin",
+                logo_bytes=logo_bytes,
+                text_mode=TEXT_MODE_KEY
+            )
+            st.download_button("Download", data=pdf_buf, file_name=f"{rid}.pdf", mime="application/pdf", key=f"dl_hist_{rid}")
+
+# =========================
+# POWER USERS (view/download registrations)
+# =========================
+if role == "power" and page == "بيانات التسجيل":
+    df = read_ws_df_cached(reg_ws, "reg_df", ttl_sec=180)
+    st.subheader("📊 بيانات التسجيل")
+    st.dataframe(df)
+    st.download_button("📥 تحميل البيانات", data=df.to_csv(index=False), file_name="TAC_Registrations.csv")

@@ -1,7 +1,7 @@
 # ------------------------------------------------------------------------------
 # author : Mohamed Habbani
-# version : v1.3.2
-# date : 2025-08-17 18:20 EDT
+# version : v1.3.3
+# date : 2025-08-17 19:05 EDT
 #
 # File: tac_admin_app.py
 # TAC Admin Panel — Accounting, Corrections, and Receipts Center
@@ -13,7 +13,10 @@
 # - Receipts page (history per student; re-download with logo + maroon circular stamp)
 # - Arabic names: "Receipt text mode" -> English (transliteration) or Auto-Arabic (if font available)
 # - Quota protection: hard caching, disabled worksheet switching by default, on-demand sharing info
-# - NEW: Payment methods English-only; show all money as USD in UI and PDFs
+# - Payment methods English-only; all money shown as USD in UI and PDFs (sheet remains numeric)
+# - NEW in v1.3.3:
+#     * Read method from ledger whether the column is "Method" or "طريقة السداد"
+#     * On save, reflect method into Registration sheet column "طريقة السداد" if that column exists
 # ------------------------------------------------------------------------------
 
 import streamlit as st
@@ -97,6 +100,9 @@ METHOD_DISPLAY_MAP = {
     "Bank transfer - Sudan": "Bank transfer - Sudan",
     "Bank transfer - Saudi": "Bank transfer - Saudi",
 }
+
+# Accept both English and Arabic header names for ledger method (used by normalization)
+LEDGER_METHOD_COLS = ["Method", "طريقة السداد"]
 
 # =========================
 # UI (RTL)
@@ -270,9 +276,30 @@ def get_current_registration_worksheet(sh):
     return sh.worksheet(title)
 
 # =========================
+# Ledger column normalization (v1.3.3)
+# =========================
+def normalize_ledger_columns(df: pd.DataFrame) -> pd.DataFrame:
+    """If ledger uses Arabic 'طريقة السداد', rename it to 'Method' for consistency."""
+    if not isinstance(df, pd.DataFrame) or df.empty:
+        return df
+    if "طريقة السداد" in df.columns and "Method" not in df.columns:
+        df = df.rename(columns={"طريقة السداد": "Method"})
+    return df
+
+def get_rownum_for_selected_reg(reg_df: pd.DataFrame, selected_label: str) -> int:
+    """Return 1-based sheet row number for the selected registration (including header)."""
+    try:
+        idxs = reg_df.index[reg_df["_label"] == selected_label].tolist()
+        if not idxs:
+            return -1
+        return idxs[0] + 2  # +1 header +1 convert to 1-based
+    except Exception:
+        return -1
+
+# =========================
 # Arabic / Transliteration helpers
 # =========================
-AR_NUM = str.maketrans("٠١٢٢٣٤٥٦٧٨٩".replace("٢","2"), "0123456789")  # tweak to ensure all digits map
+AR_NUM = str.maketrans("٠١٢٣٤٥٦٧٨٩", "0123456789")
 AR_DIAC = dict.fromkeys([ord(c) for c in "ًٌٍَُِّْـ"], None)
 
 AR_MAP = {
@@ -561,6 +588,7 @@ if role == "admin" and page == "المحاسبة والمدفوعات":
     reg_df = derive_registration_id(read_ws_df_cached(reg_ws, "reg_df", ttl_sec=180))
     master_df = read_ws_df_cached(ws_master, "master_df", ttl_sec=60)
     ledger_df = read_ws_df_cached(ws_ledger, "ledger_df", ttl_sec=60)
+    ledger_df = normalize_ledger_columns(ledger_df)  # v1.3.3
 
     if reg_df.empty:
         st.warning("لا توجد تسجيلات حالياً."); st.stop()
@@ -660,7 +688,7 @@ if role == "admin" and page == "المحاسبة والمدفوعات":
                 reg_row["Registration_ID"],
                 datetime.now().strftime("%Y-%m-%d %H:%M"),
                 f"{pay_amount:.2f}",
-                pay_method,
+                pay_method,      # English
                 pay_note,
                 admin_name,
                 inst_field
@@ -688,6 +716,19 @@ if role == "admin" and page == "المحاسبة والمدفوعات":
             else:
                 ws_master.append_row(row_vals)
 
+            # --- Reflect payment method into Registration sheet column 'طريقة السداد' IF that column exists (v1.3.3)
+            try:
+                if "طريقة السداد" in reg_df.columns:
+                    reg_rownum = get_rownum_for_selected_reg(reg_df, selected_label)
+                    if reg_rownum > 1:
+                        reg_col_idx = reg_df.columns.get_loc("طريقة السداد") + 1  # 1-based
+                        reg_ws.update_cell(reg_rownum, reg_col_idx, pay_method)
+                        # Update cached df so UI reflects immediately
+                        reg_df.loc[reg_rownum - 2, "طريقة السداد"] = pay_method
+                        _cache_set("reg_df", reg_df)
+            except Exception:
+                pass  # non-fatal
+
             # refresh caches quickly
             _cache_set("master_df", read_ws_df_cached(ws_master, "master_df", ttl_sec=0))
             _cache_set("ledger_df", read_ws_df_cached(ws_ledger, "ledger_df", ttl_sec=0))
@@ -705,7 +746,7 @@ if role == "admin" and page == "المحاسبة والمدفوعات":
                 receipt_id=receipt_id,
                 reg_row=printable,
                 pay_amount=f"{pay_amount:.2f} USD",
-                pay_method=pay_method,  # already English
+                pay_method=pay_method,  # English
                 remaining=f"{new_remaining:.2f} USD",
                 installment_no=(inst_field if inst_field else None),
                 entered_by=to_latin_if_arabic(admin_name) if TEXT_MODE_KEY=="latin" else admin_name,
@@ -776,6 +817,7 @@ def find_ledger_rownum_by_receipt(ws_ledger, df_ledger: pd.DataFrame, receipt_id
 
 def recalc_master_for_registration(ws_master, ws_ledger, reg_id: str, reg_df: pd.DataFrame):
     ledger_df = read_ws_df_cached(ws_ledger, "ledger_df", ttl_sec=0)
+    ledger_df = normalize_ledger_columns(ledger_df)  # v1.3.3
     if ledger_df.empty:
         total_paid = 0.0
     else:
@@ -839,6 +881,7 @@ if role == "admin" and page == "التصحيحات والتعديلات":
     ws_master, ws_ledger = ensure_accounting_tabs_once()
     reg_df = derive_registration_id(read_ws_df_cached(reg_ws, "reg_df", ttl_sec=180))
     ledger_df = read_ws_df_cached(ws_ledger, "ledger_df", ttl_sec=60)
+    ledger_df = normalize_ledger_columns(ledger_df)  # v1.3.3
 
     if ledger_df.empty:
         st.info("لا توجد إيصالات في الدفتر بعد."); st.stop()
@@ -864,7 +907,8 @@ if role == "admin" and page == "التصحيحات والتعديلات":
         nm = reg_map.get(reg_id, "")
         amt = str(row.get("Amount",""))
         dt  = str(row.get("Payment_Date",""))
-        return f"{rid} — {reg_id}{(' / ' + nm) if nm else ''} — {amt} USD — {dt}"
+        meth = METHOD_DISPLAY_MAP.get(row.get("Method",""), str(row.get("Method","")))
+        return f"{rid} — {reg_id}{(' / ' + nm) if nm else ''} — {amt} USD — {meth} — {dt}"
 
     options = [ _label_row(r) for _, r in ledger_df.iterrows() ]
     selected_receipt_label = st.selectbox("اختر إيصالًا لتعديله/حذفه", options)
@@ -905,7 +949,7 @@ if role == "admin" and page == "التصحيحات والتعديلات":
                     reg_id_val,
                     pay_date_val,
                     f"{amount_val:.2f}",
-                    method_val,         # English
+                    method_val,         # English normalized
                     note_val,
                     entered_by_val,
                     inst_clean
@@ -955,6 +999,7 @@ if role == "admin" and page == "الإيصالات / Receipts":
     reg_df = derive_registration_id(read_ws_df_cached(reg_ws, "reg_df", ttl_sec=180))
     master_df = read_ws_df_cached(ws_master, "master_df", ttl_sec=60)
     ledger_df = read_ws_df_cached(ws_ledger, "ledger_df", ttl_sec=60)
+    ledger_df = normalize_ledger_columns(ledger_df)  # v1.3.3
 
     if ledger_df.empty:
         st.info("لا توجد إيصالات مسجلة بعد."); st.stop()

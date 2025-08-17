@@ -100,7 +100,7 @@ METHOD_DISPLAY_MAP = {
     "السعودية": "Bank transfer - Saudi",
     "السودان": "Bank transfer - Sudan",
     "نقاط بيع": "Cash",
-    "POS":     "Bank transfer - Saudi": "Bank transfer - Saudi"
+    "POS":"Bank transfer - Saudi",
 }
 
 def normalize_method_value(val: str) -> str:

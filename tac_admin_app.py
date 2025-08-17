@@ -132,9 +132,9 @@ st.title("🛡️ لوحة التحكم الإدارية - TAC Admin")
 # =========================
 USERS = {
     "admin": {"role": "admin", "password": "adminpass"},
-    "salma": {"role": "power", "password": "stac@2025"},
+    "salma": {"role": "admin", "password": "stac@2025"},
     "sara":  {"role": "power", "password": "stac@2025"},
-    "amal":  {"role": "power", "password": "amal123"}
+    "Muhtadi":  {"role": "admin", "password": "Tato@2025"}
 }
 
 if "logged_in" not in st.session_state:

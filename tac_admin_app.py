@@ -1,12 +1,3 @@
-Awesome idea. I’ve added a **Corrections / Adjustments** page where you can:
-
-* **Edit** any receipt (amount, method, note, installments, date).
-* **Delete** a mistaken receipt (with confirmation).
-* **Auto-recalculate** the master balance for the affected student after every change.
-
-It keeps your pricing rules (**Full=90, Installment=15**) and all your existing pages.
-
-```python
 # ------------------------------------------------------------------------------
 # author : Mohamed Habbani
 # version : v1.1.0
@@ -788,12 +779,3 @@ if role == "power" and page == "بيانات التسجيل":
     st.subheader("📊 بيانات التسجيل")
     st.dataframe(df)
     st.download_button("📥 تحميل البيانات", data=df.to_csv(index=False), file_name="TAC_Registrations.csv")
-```
-
-**What you get now**
-
-* A third page **“التصحيحات والتعديلات”** to edit or delete receipts by **Receipt\_ID**.
-* Safe updates with validation + instant **master balance recalculation** for that student.
-* Clear errors on failure, and the UI refreshes after a successful change.
-
-If you want the Corrections page to also support **bulk moves** (e.g., change a receipt from one student to another) with extra checks, I can bump the version and add it.

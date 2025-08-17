@@ -39,6 +39,19 @@ from reportlab.pdfbase.ttfonts import TTFont
 # CONFIG / CONSTANTS
 # =========================
 st.set_page_config(page_title="TAC Admin Panel", layout="wide")
+METHOD_CHOICES = ["Cash", "Bank transfer - Sudan", "Bank transfer - Saudi"]
+
+# If old Arabic/legacy values exist in ledger, normalize for display/preselect:
+METHOD_DISPLAY_MAP = {
+    "نقدًا": "Cash",
+    "نقدا": "Cash",
+    "تحويل بنكي": "Bank transfer - Sudan",
+    "نقاط بيع": "Cash",
+    # pass-through for already-English values:
+    "Cash": "Cash",
+    "Bank transfer - Sudan": "Bank transfer - Sudan",
+    "Bank transfer - Saudi": "Bank transfer - Saudi",
+}
 
 # Business rules
 FULL_PRICE = 90.0
